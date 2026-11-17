@@ -99,6 +99,14 @@
       background: var(--primary-soft);
       color: var(--primary);
     }
+    .menu-toggle {
+      display: none;
+      border: 1px solid var(--border);
+      background: white;
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      color: var(--primary);
+    }
 
     main { max-width: 1320px; margin: 0 auto; padding: 28px 20px 50px; }
     .page { display: none; animation: fade .25s ease; }
@@ -237,8 +245,10 @@
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .stat-card { min-height: 138px; padding: 20px; }
       .grid-2 { grid-template-columns: 1fr; }
-      .nav { display: flex; align-items: center; }
-      .nav button { text-align: center; }
+      .nav { display: none; position: absolute; left: 12px; right: 12px; top: 70px; background: white; border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); padding: 8px; flex-direction: column; align-items: stretch; }
+      .nav.open { display: flex; }
+      .nav button { text-align: left; }
+      .menu-toggle { display: grid; place-items: center; }
       .nav-wrap { position: relative; }
     }
     @media (max-width: 680px) {
@@ -275,15 +285,12 @@
           <div class="brand-subtitle">School Cooperative Wallet</div>
         </div>
       </div>
-      <nav class="nav" id="mainNav" aria-label="เมนูหลัก">
-        <button class="active" data-page="members" type="button"><i class="fa-solid fa-users"></i> สมาชิก</button>
-      </nav>
     </div>
   </header>
 
   <main>
     <!-- MEMBERS -->
-    <section id="page-members" class="page">
+    <section id="page-members" class="page active">
       <div class="page-head">
         <div>
           <h1>สมาชิก</h1>
@@ -298,7 +305,7 @@
           <div class="scanner-box">
             <div id="memberReader" class="reader"></div>
             <div class="scanner-actions">
-              <button class="btn btn-primary" onclick="startScanner()"><i class="fa-solid fa-camera"></i> สแกน QR Code</button>
+              <button class="btn btn-primary" onclick="startScanner('member')"><i class="fa-solid fa-camera"></i> สแกน QR Code</button>
               <button class="btn btn-outline" onclick="stopScanner()"><i class="fa-solid fa-stop"></i> หยุดกล้อง</button>
             </div>
             <p class="scan-note">ต้องเปิดเว็บผ่าน HTTPS และอนุญาตให้เบราว์เซอร์ใช้กล้อง</p>
@@ -344,33 +351,27 @@
     // ตั้งค่า Web App URL ตรงนี้
     // ตัวอย่าง: https://script.google.com/macros/s/XXXXXXXX/exec
     // =============================================================
-    const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwwP2Wmi7dz_m9l252-6s4Yx-yIaYa6WwzpwKVv0Tm69mposIIrugLwRSTyjna-KjOBPA/exec';
+    const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyweOwYB1v4ZxjIqH_-d-oAeJ--kGsbacT5iVq8Dz5c3U2LJMv8uPSuusBEMOm0Dq2eFA/exec';
 
     const state = {
       scanner: null,
       scannerMode: null,
       scannerRunning: false,
       currentMember: null,
+      topupMember: null,
+      paymentMember: null,
       callbackSeed: 0
     };
 
     document.addEventListener('DOMContentLoaded', () => {
-      bindNavigation();
       loadMembers();
     });
 
-    function bindNavigation() {
-      document.querySelectorAll('#mainNav button[data-page]').forEach(btn => {
-        btn.addEventListener('click', () => showPage(btn.dataset.page));
-      });
-    }
-
     function showPage(page) {
-      if (page !== 'members') return;
+      // หน้าแรกของระบบคือหน้าเมนูสมาชิก
       stopScanner();
       document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
       document.getElementById('page-members').classList.add('active');
-      document.querySelectorAll('#mainNav button[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === 'members'));
       window.scrollTo({ top: 0, behavior: 'smooth' });
       loadMembers();
     }
@@ -448,6 +449,50 @@
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;');
+    }
+
+    function typeLabel(type) {
+      return type === 'TOPUP' ? 'เติมเงิน' : 'ชำระเงิน';
+    }
+
+    function transactionTable(transactions, emptyText = 'ยังไม่มีรายการธุรกรรม') {
+      if (!transactions || transactions.length === 0) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
+      return `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>เวลา</th><th>รหัสนักเรียน</th><th>ชื่อ-นามสกุล</th><th>รายการ</th><th>จำนวนเงิน</th><th>ยอดหลังรายการ</th></tr></thead>
+            <tbody>
+              ${transactions.map(tx => `
+                <tr>
+                  <td>${escapeHtml(tx.dateTime)}</td>
+                  <td>${escapeHtml(tx.studentId)}</td>
+                  <td>${escapeHtml(tx.fullName)}</td>
+                  <td><span class="pill ${tx.type === 'TOPUP' ? 'pill-topup' : 'pill-payment'}">${typeLabel(tx.type)}</span></td>
+                  <td class="money">${money(tx.amount)}</td>
+                  <td class="money">${money(tx.balanceAfter)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    // -------------------------------------------------------------
+    // Dashboard
+    // -------------------------------------------------------------
+    async function loadDashboard() {
+      try {
+        const res = await api('getDashboard');
+        if (!res.success) throw new Error(res.message || 'โหลด Dashboard ไม่สำเร็จ');
+        document.getElementById('memberCount').textContent = Number(res.data.memberCount || 0).toLocaleString('th-TH');
+        document.getElementById('topupToday').textContent = money(res.data.topupToday);
+        document.getElementById('paymentToday').textContent = money(res.data.paymentToday);
+        document.getElementById('balanceTotal').textContent = money(res.data.balanceTotal);
+        document.getElementById('recentTableHome').innerHTML = transactionTable(res.data.recentTransactions);
+      } catch (error) {
+        document.getElementById('recentTableHome').innerHTML = `<div class="empty">ไม่สามารถโหลดข้อมูลได้</div>`;
+        handleApiError(error);
+      }
     }
 
     // -------------------------------------------------------------
@@ -568,7 +613,7 @@
     // -------------------------------------------------------------
     // Scanner
     // -------------------------------------------------------------
-    async function startScanner() {
+    async function startScanner(mode) {
       stopScanner();
       const elementId = 'memberReader';
       const target = document.getElementById(elementId);
@@ -581,7 +626,7 @@
       }
 
       try {
-        state.scannerMode = 'member';
+        state.scannerMode = mode;
         state.scanner = new Html5Qrcode(elementId);
         const cameras = await Html5Qrcode.getCameras();
         if (!cameras || !cameras.length) throw new Error('ไม่พบกล้องในอุปกรณ์');
@@ -620,6 +665,160 @@
     }
 
     // -------------------------------------------------------------
+    // Top-up
+    // -------------------------------------------------------------
+    async function loadTopupMember(studentId = document.getElementById('topupStudentId').value) {
+      const id = String(studentId || '').trim();
+      if (!id) return Swal.fire({ icon: 'warning', title: 'กรุณาระบุรหัสนักเรียน' });
+      document.getElementById('topupStudentId').value = id;
+      try {
+        const res = await withLoading(() => api('getMemberByStudentId', { studentId: id }), 'กำลังค้นหาสมาชิก...');
+        if (!res.success) {
+          state.topupMember = null;
+          document.getElementById('topupMember').innerHTML = '<div class="empty">ไม่พบข้อมูลสมาชิก</div>';
+          document.getElementById('topupForm').classList.add('hidden');
+          Swal.fire({ icon: 'warning', title: 'ไม่พบข้อมูลสมาชิก', text: 'กรุณาตรวจสอบรหัสนักเรียน' });
+          return;
+        }
+        state.topupMember = res.data;
+        document.getElementById('topupMember').innerHTML = memberSummaryHtml(res.data);
+        renderMiniQr(res.data.studentId);
+        document.getElementById('topupForm').classList.remove('hidden');
+        document.getElementById('topupAmount').focus();
+      } catch (error) { handleApiError(error); }
+    }
+
+    async function confirmTopup() {
+      const member = state.topupMember;
+      const amount = Number(document.getElementById('topupAmount').value);
+      if (!member) return Swal.fire({ icon: 'warning', title: 'ยังไม่ได้เลือกสมาชิก' });
+      if (!(amount > 0)) return Swal.fire({ icon: 'warning', title: 'จำนวนเงินไม่ถูกต้อง', text: 'กรุณาระบุจำนวนเงินมากกว่า 0' });
+
+      const confirm = await Swal.fire({
+        icon: 'question',
+        title: 'ยืนยันเติมเงิน',
+        html: `สมาชิก <b>${escapeHtml(member.fullName)}</b><br>เติมเงิน <b>${money(amount)}</b>`,
+        showCancelButton: true,
+        confirmButtonText: 'ยืนยัน',
+        cancelButtonText: 'ยกเลิก'
+      });
+      if (!confirm.isConfirmed) return;
+
+      setBusy('topupConfirm', true);
+      try {
+        const res = await api('topUp', { studentId: member.studentId, amount });
+        if (!res.success) {
+          Swal.fire({ icon: 'warning', title: 'เติมเงินไม่สำเร็จ', text: res.message });
+          return;
+        }
+        state.topupMember = res.data.member;
+        document.getElementById('topupAmount').value = '';
+        document.getElementById('topupMember').innerHTML = memberSummaryHtml({ ...member, balance: res.data.balanceAfter });
+        renderMiniQr(member.studentId);
+        Swal.fire({ icon: 'success', title: 'เติมเงินสำเร็จ', text: `ยอดเงินใหม่ ${money(res.data.balanceAfter)}` });
+        loadDashboard();
+      } catch (error) { handleApiError(error); }
+      finally { setBusy('topupConfirm', false); }
+    }
+
+    // -------------------------------------------------------------
+    // Payment
+    // -------------------------------------------------------------
+    async function loadPaymentMember(studentId = document.getElementById('paymentStudentId').value) {
+      const id = String(studentId || '').trim();
+      if (!id) return Swal.fire({ icon: 'warning', title: 'กรุณาระบุรหัสนักเรียน' });
+      document.getElementById('paymentStudentId').value = id;
+      try {
+        const res = await withLoading(() => api('getMemberByStudentId', { studentId: id }), 'กำลังค้นหาสมาชิก...');
+        if (!res.success) {
+          state.paymentMember = null;
+          document.getElementById('paymentMember').innerHTML = '<div class="empty">ไม่พบข้อมูลสมาชิก</div>';
+          document.getElementById('paymentForm').classList.add('hidden');
+          Swal.fire({ icon: 'warning', title: 'ไม่พบข้อมูลสมาชิก', text: 'กรุณาตรวจสอบรหัสนักเรียน' });
+          return;
+        }
+        state.paymentMember = res.data;
+        document.getElementById('paymentMember').innerHTML = memberSummaryHtml(res.data);
+        renderMiniQr(res.data.studentId);
+        document.getElementById('paymentForm').classList.remove('hidden');
+        document.getElementById('paymentAmount').focus();
+      } catch (error) { handleApiError(error); }
+    }
+
+    async function confirmPayment() {
+      const member = state.paymentMember;
+      const amount = Number(document.getElementById('paymentAmount').value);
+      if (!member) return Swal.fire({ icon: 'warning', title: 'ยังไม่ได้เลือกสมาชิก' });
+      if (!(amount > 0)) return Swal.fire({ icon: 'warning', title: 'จำนวนเงินไม่ถูกต้อง', text: 'กรุณาระบุจำนวนเงินมากกว่า 0' });
+      if (amount > Number(member.balance || 0)) {
+        return Swal.fire({ icon: 'warning', title: 'ยอดเงินคงเหลือไม่เพียงพอ', text: `ยอดคงเหลือ ${money(member.balance)}` });
+      }
+
+      const confirm = await Swal.fire({
+        icon: 'question',
+        title: 'ยืนยันชำระเงิน',
+        html: `สมาชิก <b>${escapeHtml(member.fullName)}</b><br>ชำระเงิน <b>${money(amount)}</b>`,
+        showCancelButton: true,
+        confirmButtonText: 'ยืนยัน',
+        cancelButtonText: 'ยกเลิก'
+      });
+      if (!confirm.isConfirmed) return;
+
+      setBusy('paymentConfirm', true);
+      try {
+        const res = await api('makePayment', { studentId: member.studentId, amount });
+        if (!res.success) {
+          Swal.fire({ icon: 'warning', title: 'ชำระเงินไม่สำเร็จ', text: res.message });
+          return;
+        }
+        state.paymentMember = { ...member, balance: res.data.balanceAfter };
+        document.getElementById('paymentAmount').value = '';
+        document.getElementById('paymentMember').innerHTML = memberSummaryHtml(state.paymentMember);
+        renderMiniQr(member.studentId);
+        Swal.fire({ icon: 'success', title: 'ชำระเงินสำเร็จ', text: `ยอดเงินคงเหลือ ${money(res.data.balanceAfter)}` });
+        loadDashboard();
+      } catch (error) { handleApiError(error); }
+      finally { setBusy('paymentConfirm', false); }
+    }
+
+    function memberSummaryHtml(member) {
+      return `
+        <div class="member-card">
+          <div>
+            <div class="member-code">รหัสนักเรียน: ${escapeHtml(member.studentId)}</div>
+            <div class="member-name">${escapeHtml(member.fullName)}</div>
+            <div class="member-meta">
+              <span class="meta-badge"><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(member.className)}</span>
+            </div>
+            <div class="balance-box"><small>ยอดเงินคงเหลือ</small><strong>${money(member.balance)}</strong></div>
+          </div>
+          <div class="qr-panel">
+            <div class="qr-frame" id="miniQr"></div>
+            <div class="qr-label">${escapeHtml(member.studentId)}</div>
+          </div>
+        </div>`;
+    }
+
+    function renderMiniQr(studentId) {
+      const holder = document.getElementById('miniQr');
+      if (!holder || typeof QRCode === 'undefined') return;
+      holder.innerHTML = '';
+      try {
+        new QRCode(holder, { text: String(studentId), width: 116, height: 116, correctLevel: QRCode.CorrectLevel.M });
+      } catch (_) {}
+    }
+
+    function setBusy(buttonId, busy) {
+      const btn = document.getElementById(buttonId);
+      if (!btn) return;
+      btn.disabled = busy;
+      if (busy) {
+        btn.dataset.originalHtml = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner"></span> กำลังบันทึก...';
+      } else if (btn.dataset.originalHtml) {
+        btn.innerHTML = btn.dataset.originalHtml;
+      }
+    }
   </script>
 </body>
 </html>
